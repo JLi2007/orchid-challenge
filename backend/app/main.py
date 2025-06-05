@@ -1,9 +1,11 @@
-from fastapi import FastAPI
-from fastapi import WebSocket
+from fastapi import FastAPI, WebSocket, BackgroundTasks, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, HttpUrl
-from typing import Dict, List
+from typing import Dict, List, Optional
+from enum import Enum
 import uvicorn
+import uuid
+import datetime
 
 # Create FastAPI instance
 app = FastAPI(
@@ -21,21 +23,74 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Pydantic models
+#  MODELS
+class CloneStatus(str, Enum):
+    PENDING = "pending"
+    SCRAPING = "scraping" 
+    PROCESSING = "processing"
+    GENERATING = "generating"
+    COMPLETED = "completed"
+    FAILED = "failed"
 
 class CloneRequest(BaseModel):
-    url: str
+    url: HttpUrl
 
 class CloneJob(BaseModel):
     job_id: str
-    status: str  # "pending", "scraping", "processing", "generating", "completed", "failed"
+    status: CloneStatus
     url: str
     progress: int
     created_at: str
+    error_message: Optional[str] = None
+    result_data: Optional[Dict] = None
+    
+
+class CloneResponse(BaseModel):
+    job_id: str
+    status: CloneStatus
+    message: str
+
+# db
+jobs_db: Dict[str, CloneJob] = {}
 
 
 # clone website
-@app.post("/api/clone") 
+@app.post("/api/clone", response_model=CloneResponse) 
+async def clone_url(request: CloneRequest, background_tasks: BackgroundTasks):
+    try:
+        job_id = str(uuid.uuid())
+        
+        job = CloneJob(
+            job_id=job_id,
+            status=CloneStatus.PENDING,
+            url=str(request.url),
+            progress=0,
+            created_at=datetime.now()
+        )
+        
+        # Store job
+        jobs_db[job_id] = job
+        
+        # Start background processing
+        background_tasks.add_task(process_clone_job, job_id, str(request.url))
+        
+        return CloneResponse(
+            job_id=job_id,
+            status=CloneStatus.PENDING,
+            message="Cloning process started"
+        )
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to start cloning: {str(e)}")
+    
+async def process_clone_job(job_id: str, url: HttpUrl):
+    try:
+        jobs_db[job_id].status = CloneStatus.SCRAPING
+        jobs_db[job_id].progress = 10
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to process cloning: {str(e)}")
+    
 
  # returns status of job_id
 @app.get("/api/clone/{job_id}/status")

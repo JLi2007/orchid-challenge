@@ -175,8 +175,8 @@
   box-sizing: border-box;
 }
 
-/* default button cursor */
-button {
+button,
+Button {
   cursor: pointer;
 }
 
