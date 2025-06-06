@@ -1,28 +1,65 @@
 "use client";
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef } from "react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import ProgressBar from "@/components/progress";
 
 export default function Home() {
   const ws = useRef<WebSocket | null>(null);
-  const [userInput, setUserInput] = useState<string>("");
-  const [status, setStatus] = useState<"" | "PENDING" | "SCRAPING" | "PROCESSING" | "GENERATING" | "COMPLETED" | "FAILED">("");
-  
-  // websocket
-  useEffect(() => {
-    ws.current = new WebSocket("ws://localhost:8000/ws");
-
-    ws.current.onmessage = (event) => {
-      console.log(event);
-    };
-
-    return () => ws.current?.close();
-  }, []);
+  const [userInput, setUserInput] = useState<string>("https://www.tripadvisor.ca/");
+  const [status, setStatus] = useState<
+    | ""
+    | "PENDING"
+    | "SCRAPING"
+    | "PROCESSING"
+    | "GENERATING"
+    | "COMPLETED"
+    | "FAILED"
+  >("");
 
   const cloneWebsite = async () => {
-    console.log("cloning");
-    setStatus("");
+    console.log("cloning", userInput);
+
+    const res = await fetch(`${process.env.NEXT_PUBLIC_BACKEND}/api/clone`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: userInput }),
+    });
+
+    const data = await res.json(); 
+
+    console.log(data);
+    const jobId = data.job_id as string;
+
+    
+    // ── 3. Open a single WebSocket for this job_id ──
+    const backendHost = process.env.NEXT_PUBLIC_BACKEND!.replace(/^https?:\/\//, ""); 
+    ws.current = new WebSocket(`ws://${backendHost}/ws/clone/${jobId}`);
+
+    // ── 4. Handle incoming JSON messages ──
+    ws.current.onmessage = (event) => {
+      try {
+        const msg = JSON.parse(event.data) as { status: string; progress: number };
+        console.log("WS update:", msg);
+        setStatus(msg.status.toUpperCase() as any);
+      } catch (e) {
+        console.error("WebSocket invalid JSON:", event.data, "error: ", e);
+      }
+    };
+
+    ws.current.onopen = () => {
+      console.log("WebSocket opened for job:", jobId);
+      // Optionally send a “hello” or just stay idle; server doesn’t need client pings
+    };
+    ws.current.onclose = () => {
+      console.log("WebSocket closed");
+    };
+    ws.current.onerror = (err) => {
+      console.error("WebSocket error:", err);
+    };
+
+    // Clear any previous status/progress
+    setStatus("PENDING");
   };
 
   return (
@@ -41,7 +78,7 @@ export default function Home() {
             className="bg-pink-100 w-[50%]"
           />
           <Button
-            className="cursor-pointer bg-pink-200 hover:bg-pink-200/50"
+            className="cursor-pointer bg-pink-200/80 hover:bg-pink-200/70"
             variant={"secondary"}
             onClick={cloneWebsite}
           >
@@ -52,7 +89,9 @@ export default function Home() {
         </div>
       </div>
 
-      <div></div>
+      <div className="h-auto w-full">
+            {/* preview */}
+      </div>
     </div>
   );
 }

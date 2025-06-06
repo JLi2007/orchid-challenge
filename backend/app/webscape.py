@@ -1,21 +1,20 @@
 import os
-import b4
 import requests
 import asyncio
 import random
-from playwright.sync_api import sync_playwright
 from browserbase import Browserbase
+from urllib.parse import urlparse
 from dotenv import load_dotenv
 
 # types
-from typing import List, Union, Dict, Optional
+from typing import List, Dict, Optional
 from dataclasses import dataclass
 
-from urllib.parse import urljoin
-from aiohttp import ClientSession
-from fastapi import HTTPException
-from fastapi import status as http_status
-from playwright.async_api import async_playwright, Browser, Page, BrowserContext
+# from urllib.parse import urljoin
+# from aiohttp import ClientSession
+# from fastapi import HTTPException
+# from fastapi import status as http_status
+from playwright.async_api import async_playwright, Page
 
 # CONFIGURE LOGGING
 import logging
@@ -42,12 +41,12 @@ class ScrapingResult:
     error_message: Optional[str] = None
     
 class WebScrape:
-    logger("scraping website")
+    logger.info("scraping website")
     
     def create_session():
-        bb = Browserbase(api_key=os.environ["BROWSERBASE_KEY"])
+        bb = Browserbase(api_key=os.getenv("BROWSERBASE_KEY"))
         session = bb.sessions.create(
-            project_id=os.environ["BROWSERBASE_ID"],
+            project_id=os.getenv("BROWSERBASE_ID"),
         )
         return session
 
@@ -129,56 +128,129 @@ class WebScrape:
         
     async def _perform_scraping(self, url: str) -> ScrapingResult:
         try:
-            session = self.createSession()
-                
-            if session.status_code != 200:
-                raise Exception(f"Failed to create Browserbase session: {session.text}")
-                
-            print(f"View session replay at https://browserbase.com/sessions/{session.id}")
-
-            with sync_playwright() as p:
+            # Create new page
+            page = await self.context.new_page()
             
-                browser = await p.chromium.launch(
-                    headless=True,                  
-                    args=[
-                        '--no-sandbox',
-                        '--disable-dev-shm-usage',
-                        '--disable-gpu',
-                        '--disable-web-security',
-                        '--disable-features=VizDisplayCompositor'
-                    ])
-                page = await browser.new_page()
-                                
-                # Navigate to the form page
-                page.goto(url)
-
-                # Extract the books from the page
-                items = page.locator('article.product_pod')
-                books = items.all()
-
-                book_data_list = []
-                for book in books:
-
-                    book_data = {
-                        "title": book.locator('h3 a').get_attribute('title'),
-                        "price": book.locator('p.price_color').text_content(),
-                        "image": book.locator('div.image_container img').get_attribute('src'),
-                        "inStock": book.locator('p.instock.availability').text_content().strip(),
-                        "link": book.locator('h3 a').get_attribute('href')
-                    }
-                    
-                    book_data_list.append(book_data)
-
-                print("Shutting down...")
-                page.close()
-                browser.close()
-
-                return book_data_list
+            # Set up request/response interception for better asset tracking
+            requests_log = []
+            
+            async def handle_request(request):
+                requests_log.append({
+                    'url': request.url,
+                    'resource_type': request.resource_type,
+                    'method': request.method
+                })
+            
+            page.on('request', handle_request)
+            
+            # Navigate to URL with timeout
+            await page.goto(url, wait_until='networkidle', timeout=30000)
+            
+            # Wait for page to be fully loaded
+            await page.wait_for_timeout(2000)
+            
+            # Take screenshots at different viewport sizes
+            screenshots = await self._capture_screenshots(page)
+            
+            # Extract DOM structure
+            dom_structure = await page.content()
+            
+            # Extract CSS information
+            extracted_css = await self._extract_css_info(page)
+            
+            # Extract color palette
+            color_palette = await self._extract_color_palette(page)
+            
+            # Extract typography
+            typography = await self._extract_typography(page)
+            
+            # Extract layout information
+            layout_info = await self._extract_layout_info(page)
+            
+            # Extract assets from requests and DOM
+            assets = await self._extract_assets(page, requests_log, url)
+            
+            # Extract metadata
+            metadata = await self._extract_metadata(page)
+            
+            # Extract metadata
+            raw_html = await self._extract_raw_html(page)
+            
+            await page.close()
+            
+            return ScrapingResult(
+                url=url,
+                screenshots=screenshots,
+                dom_structure=self._clean_dom(dom_structure),
+                extracted_css=extracted_css,
+                color_palette=color_palette,
+                typography=typography,
+                layout_info=layout_info,
+                assets=assets,
+                metadata=metadata,
+                raw_html=raw_html,
+                success=True
+            )
             
         except Exception as e:
-            logger("placeholder")
+            logger.error(f"Scraping execution failed: {str(e)}")
+            return self._create_error_result(url, str(e))
+        
+    async def _capture_screenshots(self, page: Page) -> Dict[str, str]:
+        logger.info("capturing screenshot")
+        return {
+            "full_page": "screenshot_full_page.png",     
+            "viewport": "screenshot_viewport.png"       
+        }
+
+    async def _extract_css_info(self, page: Page) -> Dict[str, any]:
+        logger.info("extracting css")
+        return {
+            "body": {"margin": "0", "padding": "0", "font-family": "Arial"},
+            ".header": {"background-color": "#ffffff", "height": "60px"},
+            ".btn": {"background-color": "#e91e63", "color": "#ffffff", "padding": "10px 20px"}
+        }
+
+    async def _extract_color_palette(self, page: Page) -> List[str]:
+        logger.info("extracting color")
+        return ["#ffffff", "#000000", "#e91e63", "#03a9f4"]
+
+    async def _extract_typography(self, page: Page) -> Dict[str, any]:
+        logger.info("extracting typography")
+        return {
+            "title": "dummy title",
+            "description": "dummy description",
+            "url": "https://example.com"
+        }
+
+    async def _extract_layout_info(self, page: Page) -> Dict[str, any]:
+        logger.info("extracting layout info")
+        return {
+            "header": {"x": 0, "y": 0, "width": 800, "height": 60},
+            "main": {"x": 0, "y": 60, "width": 800, "height": 600},
+            "footer": {"x": 0, "y": 660, "width": 800, "height": 100}
+        }
+
+    async def _extract_assets(self, page: Page, requests_log: List, base_url: str) -> Dict[str, List[str]]:
+        logger.info("extracting assets")
+        return {
+            "images": [f"{base_url}/images/logo.png", f"{base_url}/images/banner.jpg"],  # dummy URLs
+            "scripts": [f"{base_url}/js/app.js", f"{base_url}/js/vendor.js"],
+            "stylesheets": [f"{base_url}/css/main.css", f"{base_url}/css/theme.css"]
+        }
+
+    async def _extract_raw_html(self, page: Page) -> str:  
+        logger.info("extracting raw_html")
+        return "<!DOCTYPE html><html><head><title>Dummy</title></head><body><p>Dummy HTML content</p></body></html>"
+
             
-            
+    # CHECK URL VALIDITY
+    def _is_valid_url(self, url: str) -> bool:
+        try:
+            result = urlparse(url)
+            return all([result.scheme, result.netloc])
+        except:
+            return False
             
      # ERROR RESULT       
     def _create_error_result(self, url: str, error_message: str) -> ScrapingResult: 
