@@ -32,7 +32,6 @@ class ScrapingResult:
     layout_info: Dict[str, any]
     assets: Dict[str, str] # urls
     metadata: Dict[str, any]
-    raw_html: str
     success: bool
     error_message: Optional[str] = None
     
@@ -86,7 +85,7 @@ class WebScrape:
         return ScrapingResult(
             url=url, screenshots={}, dom_structure="", 
             extracted_css={}, color_palette=[], typography={}, 
-            layout_info={}, assets={}, metadata={}, raw_html={},
+            layout_info={}, assets={}, metadata={},
             success=False, error_message="Max retries exceeded"
         )
         
@@ -167,10 +166,8 @@ class WebScrape:
             assets = await self._extract_assets(page, requests_log, url)
             
             # Extract metadata
-            metadata = await self._extract_metadata(page,requests_log, url)
-            
-            # Extract html
-            raw_html = await self._extract_raw_html(page)
+            metadata = await self._extract_metadata(page)
+
             
             await page.close()
             
@@ -184,7 +181,6 @@ class WebScrape:
                 layout_info=layout_info,
                 assets=assets,
                 metadata=metadata,
-                raw_html=raw_html,
                 success=True
             )
             
@@ -580,15 +576,7 @@ class WebScrape:
         except Exception as e:
             logger.error(f"Metadata extraction failed: {str(e)}")
             return {}
-
-    async def _extract_raw_html(self, page: Page) -> str:  
-        try:
-            return page.content()
         
-        except Exception as e:
-            logger.error(f"Metadata extraction failed: {str(e)}")
-            return {}
-
     def _clean_dom(self, html: str) -> str:
         try:
             soup = BeautifulSoup(html, 'html.parser')
@@ -636,7 +624,7 @@ class WebScrape:
         return ScrapingResult(
             url=url, screenshots={}, dom_structure="", 
             extracted_css={}, color_palette=[], typography={}, 
-            layout_info={}, assets={}, metadata={}, raw_html={},
+            layout_info={}, assets={}, metadata={},
             success=False, error_message=error_message
         )
                  

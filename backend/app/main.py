@@ -1,17 +1,18 @@
 import os
+import asyncio
+import uvicorn
+import uuid
+import openai
 from fastapi import FastAPI, WebSocket, BackgroundTasks, HTTPException, Body
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, HttpUrl
 from typing import Dict, List, Optional
 from enum import Enum
 from datetime import datetime
-import uvicorn
-import uuid
+from webscape import ScrapingResult, WebScrape
 from dotenv import load_dotenv
 
-load_dotenv
-
-from webscape import ScrapingResult, WebScrape
+load_dotenv()
 
 # Create FastAPI instance
 app = FastAPI(
@@ -28,6 +29,12 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Initialize OpenAI client
+openai_client = openai.OpenAI(
+    api_key=  os.getenv("OPENAI_KEY")
+)
+
 
 #  MODELS
 class CloneStatus(str, Enum):
@@ -87,8 +94,22 @@ manager = ConnectionManager()
 # Initialize scraper
 scraper = WebScrape(
     use_browserbase=False,  # Set to True with API key for production
-    browserbase_api_key=os.getenv("BROWSERBASE_KEY")  # Add your Browserbase API key here
+    browserbase_api_key=os.getenv("BROWSERBASE_KEY")
 )
+
+################# ROOT
+@app.get("/")
+async def root():
+    return {
+        "message": "Website Cloner API", 
+        "status": "running",
+        "endpoints": {
+            "start_clone": "POST /api/clone",
+            "check_status": "GET /api/clone/{job_id}/status", 
+            "get_result": "GET /api/clone/{job_id}/result"
+        }
+    }
+#################
 
 # clone website
 @app.post("/api/clone", response_model=CloneResponse) 
@@ -122,7 +143,9 @@ async def clone_url(clone_request: CloneRequest, background_tasks: BackgroundTas
 # PROCESS CLONE JOB
 async def process_clone_job(job_id: str, url: str):
     try:
-        # Update job status
+        while job_id not in manager.active_connections:
+            await asyncio.sleep(0.1)
+            
         jobs_db[job_id].status = CloneStatus.SCRAPING
         jobs_db[job_id].progress = 10
         
@@ -183,7 +206,7 @@ async def process_clone_job(job_id: str, url: str):
         # Step 3: Generate HTML with LLM (placeholder for now)
         generated_html = await generate_html_with_llm(processed_data)
         
-        # Update job as completed
+        # Step 4: Update job as completed
         jobs_db[job_id].status = CloneStatus.COMPLETED
         jobs_db[job_id].progress = 100
         
@@ -200,10 +223,14 @@ async def process_clone_job(job_id: str, url: str):
             "original_url": url,
             "generated_html": generated_html,
             "scraping_metadata": {
-                "colors_found": len(scraping_result.color_palette),
-                "images_found": len(scraping_result.assets.get("images", [])),
-                "fonts_found": len(scraping_result.typography.get("fonts", [])),
-                "screenshots_taken": list(scraping_result.screenshots.keys())
+            "colors_found": len(scraping_result.color_palette),
+            "images_found": len(scraping_result.assets.get("images", [])),
+            "fonts_found": len(scraping_result.typography.get("fonts", [])),
+            "screenshots_taken": list(scraping_result.screenshots.keys()),
+            "layout_type": scraping_result.layout_info.get("type"),
+            "dominant_color": scraping_result.color_palette[0] if scraping_result.color_palette else None,
+            "title": scraping_result.metadata.get("title"),
+            "description": scraping_result.metadata.get("description"),
             }
         }
         
@@ -224,7 +251,9 @@ async def process_clone_job(job_id: str, url: str):
         )
 
 async def process_scraping_data(scraping_result: ScrapingResult) -> Dict:
-    """Process scraped data for LLM consumption"""
+    # send to llm to re-create
+    await asyncio.sleep(1)
+    
     return {
         "url": scraping_result.url,
         "screenshots": scraping_result.screenshots,
@@ -234,50 +263,178 @@ async def process_scraping_data(scraping_result: ScrapingResult) -> Dict:
         "layout_info": scraping_result.layout_info,
         "css_info": scraping_result.extracted_css,
         "metadata": scraping_result.metadata,
-        "raw_html": scraping_result.raw_html
     }
     
+    
 async def generate_html_with_llm(processed_data: Dict) -> str:
-    """Generate HTML using LLM (placeholder implementation)"""
-    # TODO: Implement LLM integration here
-    # This is where you'll call Claude/GPT with the processed data
+    # generate the website with llm
     
-    # For now, return a simple HTML template
-    return f"""
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Cloned Website</title>
-        <style>
-            body {{
-                font-family: {processed_data['typography'].get('fonts', ['Arial'])[0] if processed_data['typography'].get('fonts') else 'Arial'};
-                background-color: {processed_data['color_palette'][0] if processed_data['color_palette'] else '#ffffff'};
-            }}
-        </style>
-    </head>
-    <body>
-        <h1>Website Clone</h1>
-        <p>Original URL: {processed_data['url']}</p>
-        <p>Colors found: {len(processed_data['color_palette'])}</p>
-        <p>Fonts found: {len(processed_data['typography'].get('fonts', []))}</p>
-        <!-- LLM-generated content will go here -->
-    </body>
-    </html>
-    """
-    
+    try:
+        # Prepare the prompt with scraped data
+        prompt = create_html_generation_prompt(processed_data)
+        
+        response = openai_client.chat.completions.create(
+            model="gpt-4o",  # or "gpt-3.5-turbo" for cheaper option
+            messages=[
+                {
+                    "role": "system",
+                    "content": """You are an expert web developer who recreates websites based on scraped data. 
+                    Generate clean, modern HTML with inline CSS that closely matches the original design.
+                    Make it responsive and professional. Only return the HTML code, no explanations."""
+                },
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ],
+            max_tokens=4000,
+            temperature=0.3
+        )
+        
+        generated_html = response.choices[0].message.content
+        
+        # Clean up the response (remove markdown code blocks if present)
+        if "```html" in generated_html:
+            generated_html = generated_html.split("```html")[1].split("```")[0].strip()
+        elif "```" in generated_html:
+            generated_html = generated_html.split("```")[1].split("```")[0].strip()
+            
+        return generated_html
+        
+    except Exception as e:
+        print(f"Error generating HTML with OpenAI: {e}")
+        return create_fallback_html(processed_data)
 
-#  # returns status of job_id
-# @app.get("/api/clone/{job_id}/status", response_model=CloneJob)
-# async def get_clone_status(job_id: str):
-#     if job_id not in jobs_db:
-#         raise HTTPException(status_code=404, detail="Job not found")
+def create_html_generation_prompt(processed_data: Dict) -> str:    
+    # Extract key information
+    url = processed_data.get('url', '')
+    colors = processed_data.get('color_palette', [])
+    fonts = processed_data.get('typography', {}).get('fonts', [])
+    layout_info = processed_data.get('layout_info', {})
+    metadata = processed_data.get('metadata', {})
+    dom_structure = processed_data.get('dom_structure', '')
     
-#     return jobs_db[job_id]
+    # Include screenshot data if available
+    screenshot_info = ""
+    if processed_data.get('screenshots'):
+        screenshot_info = f"Screenshots available: {list(processed_data['screenshots'].keys())}"
+    
+    prompt = f"""
+        Please recreate this website as HTML with inline CSS based on the following scraped data:
+
+        **Original URL:** {url}
+
+        **Page Metadata:**
+        - Title: {metadata.get('title', 'N/A')}
+        - Description: {metadata.get('description', 'N/A')}
+
+        **Design Elements:**
+        - Color Palette: {colors[:5]}  # Top 5 colors
+        - Fonts: {fonts[:3]}  # Top 3 fonts
+        - Layout Type: {layout_info.get('type', 'unknown')}
+
+        **DOM Structure Preview:**
+        {dom_structure[:2000]}...
+
+        **Screenshots:** {screenshot_info}
+
+        **Requirements:**
+        1. Create a complete HTML document with inline CSS
+        2. Use the extracted colors and fonts
+        3. Make it responsive and modern
+        4. Include proper semantic HTML structure
+        5. Match the layout and visual hierarchy as closely as possible
+        6. Add hover effects and smooth transitions
+        7. Ensure cross-browser compatibility
+
+        Generate clean, professional HTML that captures the essence and design of the original website as accurately as possible.
+        """
+    
+    return prompt
+
+#FALLBACK HTML IF GENERATION FAILS
+def create_fallback_html(processed_data: Dict) -> str:
+    colors = processed_data.get('color_palette', ['#ffffff', '#000000'])
+    fonts = processed_data.get('typography', {}).get('fonts', ['Arial', 'sans-serif'])
+    title = processed_data.get('metadata', {}).get('title', 'Cloned Website')
+    
+    return f"""
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>{title}</title>
+            <style>
+                * {{
+                    margin: 0;
+                    padding: 0;
+                    box-sizing: border-box;
+                }}
+                
+                body {{
+                    font-family: {fonts[0] if fonts else 'Arial'}, sans-serif;
+                    background-color: {colors[0] if colors else '#ffffff'};
+                    color: {colors[1] if len(colors) > 1 else '#000000'};
+                    line-height: 1.6;
+                    padding: 20px;
+                }}
+                
+                .container {{
+                    max-width: 1200px;
+                    margin: 0 auto;
+                    padding: 20px;
+                }}
+                
+                .header {{
+                    text-align: center;
+                    margin-bottom: 40px;
+                    padding: 40px 0;
+                    background: linear-gradient(135deg, {colors[0] if colors else '#f0f0f0'}, {colors[1] if len(colors) > 1 else '#e0e0e0'});
+                    border-radius: 10px;
+                }}
+                
+                h1 {{
+                    font-size: 2.5rem;
+                    margin-bottom: 10px;
+                    color: {colors[2] if len(colors) > 2 else '#333'};
+                }}
+                
+                .content {{
+                    background: white;
+                    padding: 30px;
+                    border-radius: 10px;
+                    box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+                }}
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="header">
+                    <h1>{title}</h1>
+                    <p>Successfully cloned from: {processed_data.get('url', '')}</p>
+                </div>
+                
+                <div class="content">
+                    <h2>Website Clone Generated</h2>
+                    <p>This is a basic clone. The OpenAI API would generate more sophisticated HTML based on the scraped data.</p>
+                    
+                    <div style="margin-top: 20px;">
+                        <h3>Detected Elements:</h3>
+                        <ul>
+                            <li>Colors: {len(colors)} found</li>
+                            <li>Fonts: {len(fonts)} found</li>
+                            <li>Original URL: {processed_data.get('url', '')}</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </body>
+        </html>
+        """
 
 # result
-@app.get("api/clone/{job_id}/result")
+@app.get("/api/clone/{job_id}/result")
 async def get_clone_result(job_id: str):
     if job_id not in jobs_db:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -332,19 +489,6 @@ async def websocket_endpoint(websocket: WebSocket, job_id: str):
         pass
     finally:
         manager.disconnect(job_id)
-       
-# root
-@app.get("/")
-async def root():
-    return {
-        "message": "Website Cloner API", 
-        "status": "running",
-        "endpoints": {
-            "start_clone": "POST /api/clone",
-            "check_status": "GET /api/clone/{job_id}/status", 
-            "get_result": "GET /api/clone/{job_id}/result"
-        }
-    }
 
 # RUN APPLICATION
 def main():

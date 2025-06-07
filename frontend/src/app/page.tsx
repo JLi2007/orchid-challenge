@@ -1,12 +1,14 @@
 "use client";
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import ProgressBar from "@/components/progress";
 
 export default function Home() {
   const ws = useRef<WebSocket | null>(null);
-  const [userInput, setUserInput] = useState<string>("https://www.tripadvisor.ca/");
+  const [userInput, setUserInput] = useState<string>(
+    "https://www.tripadvisor.ca/"
+  );
   const [status, setStatus] = useState<
     | ""
     | "PENDING"
@@ -16,9 +18,16 @@ export default function Home() {
     | "COMPLETED"
     | "FAILED"
   >("");
+  const [progress, setProgress] = useState<number>(0);
+  const [generatedHtml, setGeneratedHtml] = useState<string>("");
+  const [iframeUrl, setIframeUrl] = useState<string>("");
 
   const cloneWebsite = async () => {
     console.log("cloning", userInput);
+
+    // Reset previous state
+    setGeneratedHtml("");
+    setIframeUrl("");
 
     const res = await fetch(`${process.env.NEXT_PUBLIC_BACKEND}/api/clone`, {
       method: "POST",
@@ -26,21 +35,64 @@ export default function Home() {
       body: JSON.stringify({ url: userInput }),
     });
 
-    const data = await res.json(); 
+    const data = await res.json();
 
     console.log(data);
     const jobId = data.job_id as string;
 
-    // ── 3. Open a single WebSocket for this job_id ──
-    const backendHost = process.env.NEXT_PUBLIC_BACKEND!.replace(/^https?:\/\//, ""); 
+    // Open a single WebSocket for this job_id
+    const backendHost = process.env.NEXT_PUBLIC_BACKEND!.replace(
+      /^https?:\/\//,
+      ""
+    );
     ws.current = new WebSocket(`ws://${backendHost}/ws/clone/${jobId}`);
 
-    // ── 4. Handle incoming JSON messages ──
+    setStatus("PENDING");
+    setProgress(0);
+
     ws.current.onmessage = (event) => {
       try {
-        const msg = JSON.parse(event.data) as { status: string; progress: number };
+        const msg = JSON.parse(event.data) as {
+          status?: string;
+          progress?: number;
+        };
+
         console.log("WS update:", msg);
-        setStatus(msg.status.toUpperCase() as any);
+
+        if (typeof msg.progress === "number") {
+          setProgress(msg.progress);
+        }
+
+        if (msg.status) {
+          setStatus(msg.status.toUpperCase() as any);
+
+          // Fetch HTML when completed
+          if (msg.status.toUpperCase() === "COMPLETED") {
+            const getHTML = async () => {
+              try {
+                const res = await fetch(`${process.env.NEXT_PUBLIC_BACKEND}/api/clone/${jobId}/result`);
+                const data = await res.json();
+
+                console.log("DATA:", data);
+                console.log("Generated HTML:", data.generated_html);
+
+                // Set the HTML and create blob URL for iframe
+                const htmlContent = data.generated_html;
+                setGeneratedHtml(htmlContent);
+
+                // Create blob URL for iframe
+                const blob = new Blob([htmlContent], { type: 'text/html' });
+                const url = URL.createObjectURL(blob);
+                setIframeUrl(url);
+
+              } catch (error) {
+                console.error("Error fetching HTML:", error);
+              }
+            };
+
+            getHTML();
+          }
+        }
       } catch (e) {
         console.error("WebSocket invalid JSON:", event.data, "error: ", e);
       }
@@ -56,10 +108,29 @@ export default function Home() {
     ws.current.onerror = (err) => {
       console.error("WebSocket error:", err);
     };
-
-    // Clear any previous status/progress
-    setStatus("PENDING");
   };
+
+  // Clean up blob URL when component unmounts or new HTML is generated
+  const cleanupBlobUrl = useCallback(() => {
+    if (iframeUrl) {
+      URL.revokeObjectURL(iframeUrl);
+    }
+  }, [iframeUrl]);
+
+  // Clean up on component unmount
+  useEffect(() => {
+    return () => {
+      cleanupBlobUrl();
+      if (ws.current) {
+        ws.current.close();
+      }
+    };
+  }, [cleanupBlobUrl]);
+
+  // Clean up previous blob URL when creating new one
+  useEffect(() => {
+    return cleanupBlobUrl;
+  }, [iframeUrl, cleanupBlobUrl]);
 
   return (
     <div className="w-screen h-screen min-h-screen relative bg-[url('/bg1.png')] bg-cover bg-center">
@@ -81,16 +152,49 @@ export default function Home() {
             variant={"secondary"}
             onClick={cloneWebsite}
           >
-            clone.
+            CLONE!
           </Button>
 
-          <ProgressBar status={status}/>
+          <ProgressBar status={status} progress={progress} />
         </div>
       </div>
 
-      <div className="h-auto w-full">
-            {/* preview */}
+      {/* Iframe to display generated HTML */}
+      <div className="h-[70vh] w-full p-4">
+        {iframeUrl ? (
+          <iframe
+            src={iframeUrl}
+            className="w-full h-full border border-gray-300 rounded-lg shadow-lg"
+            title="Cloned Website"
+          />
+        ) : (
+          <div className="w-full h-full border border-gray-300 rounded-lg shadow-lg bg-gray-100 flex items-center justify-center">
+            <p className="text-gray-500">
+              {status === "COMPLETED" ? "Loading HTML..." : "Generated website will appear here"}
+            </p>
+          </div>
+        )}
       </div>
+
+      {generatedHtml && (
+        <div className="fixed bottom-4 right-4">
+          <Button
+            onClick={() => {
+              const element = document.createElement("a");
+              const file = new Blob([generatedHtml], { type: 'text/html' });
+              element.href = URL.createObjectURL(file);
+              element.download = "cloned-website.html";
+              document.body.appendChild(element);
+              element.click();
+              document.body.removeChild(element);
+              URL.revokeObjectURL(element.href);
+            }}
+            className="bg-pink-200/90 hover:bg-pink-200/80 text-black"
+          >
+            Download HTML
+          </Button>
+        </div>
+      )}
     </div>
   );
 }
