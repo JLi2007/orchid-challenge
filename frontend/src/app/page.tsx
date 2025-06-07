@@ -9,6 +9,7 @@ export default function Home() {
   const [userInput, setUserInput] = useState<string>(
     "https://tailwindcss.com"
   );
+  // https://quotes.toscrape.com/
   const [status, setStatus] = useState<
     | ""
     | "PENDING"

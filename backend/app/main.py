@@ -9,7 +9,7 @@ from pydantic import BaseModel, HttpUrl
 from typing import Dict, List, Optional
 from enum import Enum
 from datetime import datetime
-from webscape import ScrapingResult, WebScrape
+from webscrape import ScrapingResult, WebScrape
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -34,7 +34,6 @@ app.add_middleware(
 openai_client = openai.OpenAI(
     api_key=  os.getenv("OPENAI_KEY")
 )
-
 
 #  MODELS
 class CloneStatus(str, Enum):
