@@ -2,6 +2,7 @@ import os
 import requests
 import asyncio
 import random
+import re
 import base64
 import logging
 from browserbase import Browserbase
@@ -53,6 +54,231 @@ class WebScrape:
         self.session.headers.update({
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
         })
+    
+    async def scrape_full_page(self, page: Page, url: str):
+        """
+        Scrape the complete page content, not just the viewport
+        """
+        try:
+            # 1. WAIT FOR PAGE TO FULLY LOAD
+            await page.wait_for_load_state('networkidle')
+            await asyncio.sleep(2)  # Extra buffer for dynamic content
+            
+            # 2. HANDLE LAZY LOADING - SCROLL TO TRIGGER CONTENT
+            await self._trigger_lazy_content(page)
+            
+            # 3. TAKE FULL PAGE SCREENSHOT (not just viewport)
+            screenshots = await self._capture_full_screenshots(page)
+            
+            # 4. GET COMPLETE DOM (after all content is loaded)
+            dom_structure = await self._extract_full_dom(page)
+            
+            # 5. EXTRACT ALL ASSETS (now that everything is loaded)
+            assets = await self._extract_assets(page, self.requests_log, url)
+            
+            return {
+                'screenshots': screenshots,
+                'dom_structure': dom_structure,
+                'assets': assets
+            }
+            
+        except Exception as e:
+            logger.error(f"Full page scraping failed: {e}")
+            raise
+
+    async def _trigger_lazy_content(self, page: Page):
+        """
+        Scroll through the page to trigger lazy loading and dynamic content
+        """
+        try:
+            # Get page height
+            page_height = await page.evaluate('document.body.scrollHeight')
+            viewport_height = await page.evaluate('window.innerHeight')
+            
+            # Scroll progressively to trigger lazy loading
+            current_position = 0
+            scroll_step = viewport_height * 0.8  # 80% of viewport height
+            
+            while current_position < page_height:
+                # Scroll down
+                await page.evaluate(f'window.scrollTo(0, {current_position})')
+                await asyncio.sleep(0.5)  # Wait for content to load
+                
+                # Check if page height changed (new content loaded)
+                new_height = await page.evaluate('document.body.scrollHeight')
+                if new_height > page_height:
+                    page_height = new_height
+                    
+                current_position += scroll_step
+            
+            # Scroll back to top for consistent starting position
+            await page.evaluate('window.scrollTo(0, 0)')
+            await asyncio.sleep(1)
+            
+            # HANDLE INFINITE SCROLL
+            await self._handle_infinite_scroll(page)
+            
+            # CLICK "LOAD MORE" BUTTONS
+            await self._click_load_more_buttons(page)
+            
+        except Exception as e:
+            logger.error(f"Lazy content loading failed: {e}")
+
+    async def _handle_infinite_scroll(self, page: Page):
+        """
+        Handle infinite scroll pages (like social media feeds)
+        """
+        try:
+            max_scrolls = 5  # Limit to prevent infinite loops
+            scroll_count = 0
+            previous_height = 0
+            
+            while scroll_count < max_scrolls:
+                # Get current height
+                current_height = await page.evaluate('document.body.scrollHeight')
+                
+                # If height hasn't changed, we're done
+                if current_height == previous_height:
+                    break
+                    
+                previous_height = current_height
+                
+                # Scroll to bottom
+                await page.evaluate('window.scrollTo(0, document.body.scrollHeight)')
+                
+                # Wait for new content
+                await asyncio.sleep(2)
+                
+                scroll_count += 1
+                
+        except Exception as e:
+            logger.debug(f"Infinite scroll handling failed: {e}")
+
+    async def _click_load_more_buttons(self, page: Page):
+        """
+        Click common "Load More" or "Show More" buttons
+        """
+        load_more_selectors = [
+            'button:has-text("Load More")',
+            'button:has-text("Show More")',
+            'button:has-text("View More")',
+            'a:has-text("Load More")',
+            '.load-more',
+            '.show-more',
+            '.view-more',
+            '[data-testid*="load"]',
+            '[data-testid*="more"]'
+        ]
+        
+        for selector in load_more_selectors:
+            try:
+                # Check if button exists and is visible
+                button = await page.query_selector(selector)
+                if button:
+                    is_visible = await button.is_visible()
+                    if is_visible:
+                        await button.click()
+                        await asyncio.sleep(2)  # Wait for content to load
+                        break  # Only click one button to avoid conflicts
+            except Exception as e:
+                logger.debug(f"Load more button click failed for {selector}: {e}")
+
+    async def _capture_full_screenshots(self, page: Page) -> Dict[str, str]:
+        """
+        Capture full page screenshots, not just viewport
+        """
+        screenshots = {}
+        
+        try:
+            # FULL PAGE SCREENSHOT
+            full_page_screenshot = await page.screenshot(
+                full_page=True,  # This is the key parameter!
+                type='png'
+            )
+            screenshots['full_page'] = base64.b64encode(full_page_screenshot).decode()
+            
+            # MOBILE VIEW FULL PAGE
+            await page.set_viewport_size({"width": 375, "height": 667})
+            await asyncio.sleep(1)
+            
+            mobile_screenshot = await page.screenshot(
+                full_page=True,  # Full page for mobile too
+                type='png'
+            )
+            screenshots['mobile_full'] = base64.b64encode(mobile_screenshot).decode()
+            
+            # Reset to desktop
+            await page.set_viewport_size({"width": 1920, "height": 1080})
+            
+        except Exception as e:
+            logger.error(f"Full page screenshot failed: {e}")
+            
+        return screenshots
+
+    async def _extract_full_dom(self, page: Page) -> str:
+        """
+        Extract complete DOM structure after all content is loaded
+        """
+        try:
+            # Wait a bit more to ensure everything is rendered
+            await asyncio.sleep(1)
+            
+            # Get the complete HTML content
+            full_html = await page.content()
+            
+            # Also get the computed/rendered content
+            rendered_content = await page.evaluate("""
+                () => {
+                    // Get all text content that's actually visible
+                    const walker = document.createTreeWalker(
+                        document.body,
+                        NodeFilter.SHOW_TEXT,
+                        {
+                            acceptNode: function(node) {
+                                const parent = node.parentElement;
+                                if (!parent) return NodeFilter.FILTER_SKIP;
+                                
+                                const style = window.getComputedStyle(parent);
+                                if (style.display === 'none' || 
+                                    style.visibility === 'hidden' ||
+                                    style.opacity === '0') {
+                                    return NodeFilter.FILTER_SKIP;
+                                }
+                                
+                                return NodeFilter.FILTER_ACCEPT;
+                            }
+                        }
+                    );
+                    
+                    let textContent = '';
+                    let node;
+                    while (node = walker.nextNode()) {
+                        textContent += node.textContent.trim() + ' ';
+                    }
+                    
+                    return {
+                        visible_text: textContent.trim(),
+                        total_elements: document.querySelectorAll('*').length,
+                        page_height: document.body.scrollHeight,
+                        viewport_height: window.innerHeight
+                    };
+                }
+            """)
+            
+            # Return structured DOM info
+            return {
+                'full_html': full_html,
+                'visible_text': rendered_content['visible_text'],
+                'element_count': rendered_content['total_elements'],
+                'page_dimensions': {
+                    'height': rendered_content['page_height'],
+                    'viewport_height': rendered_content['viewport_height']
+                }
+            }
+            
+        except Exception as e:
+            logger.error(f"Full DOM extraction failed: {e}")
+            return await page.content()  # Fallback to basic content
         
     async def scrape_website(self, url: str, max_retries: int = 3) -> ScrapingResult:
         for attempt in range(max_retries):
@@ -167,8 +393,7 @@ class WebScrape:
             
             # Extract metadata
             metadata = await self._extract_metadata(page)
-
-            
+      
             await page.close()
             
             return ScrapingResult(
@@ -218,126 +443,347 @@ class WebScrape:
         
         return screenshots
 
-    # CSS DATA FROM WEBSITE
+    
     async def _extract_css_info(self, page: Page) -> Dict[str, any]:
         css_info = {
             "body_styles": {},
             "header_styles": {},
             "main_content_styles": {},
-            "common_patterns": []
+            "common_patterns": [],
+            "layout_info": {},
+            "responsive_breakpoints": [],
+            "animations": []
         }
         
         try:
-            # Extract body styles
-            body_styles = await page.evaluate("""
+            # Extract all CSS info in a single page.evaluate call for better performance
+            extracted_data = await page.evaluate("""
                 () => {
+                    const getComputedStyles = (element, properties) => {
+                        if (!element) return null;
+                        const styles = window.getComputedStyle(element);
+                        const result = {};
+                        properties.forEach(prop => {
+                            result[prop] = styles[prop];
+                        });
+                        return result;
+                    };
+                    
+                    const importantProps = [
+                        'background-color', 'font-family', 'font-size', 'font-weight',
+                        'line-height', 'color', 'margin', 'padding', 'display',
+                        'position', 'width', 'height', 'border', 'border-radius',
+                        'box-shadow', 'text-align', 'flex-direction', 'justify-content',
+                        'align-items', 'grid-template-columns', 'z-index'
+                    ];
+                    
+                    const result = {
+                        body_styles: getComputedStyles(document.body, importantProps),
+                        header_styles: getComputedStyles(document.querySelector('header, .header, [role="banner"]'), importantProps),
+                        main_content_styles: getComputedStyles(document.querySelector('main, .main, .content, #content'), importantProps),
+                        common_patterns: [],
+                        layout_info: {},
+                        responsive_breakpoints: [],
+                        animations: []
+                    };
+                    
+                    // Extract common element styles
+                    const selectors = [
+                        'h1', 'h2', 'h3', 'h4', 'p', 'a', 'button', 'input',
+                        '.container', '.wrapper', '.content', '.header', '.footer',
+                        'nav', '.nav', '.menu', '.btn', '.card', '.hero'
+                    ];
+                    
+                    selectors.forEach(selector => {
+                        const elements = document.querySelectorAll(selector);
+                        if (elements.length > 0) {
+                            const styles = getComputedStyles(elements[0], importantProps);
+                            if (styles) {
+                                result.common_patterns.push({
+                                    selector: selector,
+                                    styles: styles,
+                                    count: elements.length
+                                });
+                            }
+                        }
+                    });
+                    
+                    // Extract layout information
                     const body = document.body;
-                    const styles = window.getComputedStyle(body);
-                    return {
-                        'background-color': styles.backgroundColor,
-                        'font-family': styles.fontFamily,
-                        'font-size': styles.fontSize,
-                        'line-height': styles.lineHeight,
-                        'color': styles.color,
-                        'margin': styles.margin,
-                        'padding': styles.padding
+                    const bodyStyles = window.getComputedStyle(body);
+                    result.layout_info = {
+                        layout_type: bodyStyles.display === 'flex' ? 'flexbox' : 
+                                    bodyStyles.display === 'grid' ? 'grid' : 'block',
+                        max_width: bodyStyles.maxWidth,
+                        container_width: document.querySelector('.container, .wrapper, main')?.offsetWidth || body.offsetWidth,
+                        has_sidebar: !!document.querySelector('.sidebar, .side-nav, aside'),
+                        is_responsive: window.innerWidth !== document.documentElement.scrollWidth
                     };
+                    
+                    // Extract CSS custom properties (CSS variables)
+                    const rootStyles = window.getComputedStyle(document.documentElement);
+                    const cssVars = {};
+                    for (let i = 0; i < rootStyles.length; i++) {
+                        const prop = rootStyles.item(i);
+                        if (prop.startsWith('--')) {
+                            cssVars[prop] = rootStyles.getPropertyValue(prop).trim();
+                        }
+                    }
+                    result.css_variables = cssVars;
+                    
+                    // Detect animations
+                    const animatedElements = document.querySelectorAll('*');
+                    const animations = [];
+                    animatedElements.forEach(el => {
+                        const styles = window.getComputedStyle(el);
+                        if (styles.animationName !== 'none' || styles.transitionProperty !== 'none') {
+                            animations.push({
+                                selector: el.tagName.toLowerCase() + (el.className ? '.' + el.className.split(' ')[0] : ''),
+                                animation: styles.animationName,
+                                transition: styles.transitionProperty,
+                                duration: styles.animationDuration || styles.transitionDuration
+                            });
+                        }
+                    });
+                    result.animations = animations.slice(0, 10); // Limit to 10
+                    
+                    // Extract media query breakpoints from stylesheets
+                    const breakpoints = new Set();
+                    try {
+                        Array.from(document.styleSheets).forEach(sheet => {
+                            try {
+                                Array.from(sheet.cssRules || sheet.rules || []).forEach(rule => {
+                                    if (rule.type === CSSRule.MEDIA_RULE) {
+                                        const mediaText = rule.media.mediaText;
+                                        const widthMatch = mediaText.match(/\\((min|max)-width:\\s*(\\d+)px\\)/);
+                                        if (widthMatch) {
+                                            breakpoints.add(parseInt(widthMatch[2]));
+                                        }
+                                    }
+                                });
+                            } catch (e) {
+                                // Cross-origin stylesheets may throw errors
+                            }
+                        });
+                    } catch (e) {
+                        // Fallback to common breakpoints
+                        [768, 1024, 1200, 1400].forEach(bp => breakpoints.add(bp));
+                    }
+                    result.responsive_breakpoints = Array.from(breakpoints).sort((a, b) => a - b);
+                    
+                    return result;
                 }
             """)
-            css_info["body_styles"] = body_styles
             
-            # Extract header styles if exists
-            header_styles = await page.evaluate("""
-                () => {
-                    const header = document.querySelector('header');
-                    if (!header) return null;
-                    const styles = window.getComputedStyle(header);
-                    return {
-                        'background-color': styles.backgroundColor,
-                        'height': styles.height,
-                        'padding': styles.padding,
-                        'position': styles.position,
-                        'display': styles.display
-                    };
-                }
-            """)
-            if header_styles:
-                css_info["header_styles"] = header_styles
+            # Merge extracted data
+            css_info.update(extracted_data)
             
-            common_selectors = ["h1", "h2", "h3", "p", "a", "button", ".container", ".wrapper", "nav"]
+            # Clean up null values and normalize data
+            css_info = self._normalize_css_data(css_info)
             
-            for selector in common_selectors:
-                try:
-                    element_styles = await page.evaluate(f"""
-                        () => {{
-                            const element = document.querySelector('{selector}');
-                            if (!element) return null;
-                            const styles = window.getComputedStyle(element);
-                            return {{
-                                'font-size': styles.fontSize,
-                                'font-weight': styles.fontWeight,
-                                'color': styles.color,
-                                'margin': styles.margin,
-                                'padding': styles.padding,
-                                'display': styles.display,
-                                'background-color': styles.backgroundColor
-                            }};
-                        }}
-                    """)
-                    
-                    if element_styles:
-                        css_info["common_patterns"].append({
-                            "selector": selector,
-                            "styles": element_styles
-                        })
-                        
-                except Exception as e:
-                    logger.debug(f"Failed to extract styles for {selector}: {str(e)}")
-                    continue
-                    
         except Exception as e:
             logger.error(f"CSS extraction failed: {str(e)}")
         
         return css_info
 
+    def _normalize_css_data(self, css_info: Dict) -> Dict:
+        def clean_styles(styles):
+            if not styles:
+                return {}
+            
+            cleaned = {}
+            for key, value in styles.items():
+                if value and value not in ['none', 'initial', 'inherit', 'unset', 'auto']:
+                    # Convert rgb() to hex for colors
+                    if 'color' in key and value.startswith('rgb'):
+                        try:
+                            rgb_match = re.findall(r'\d+', value)
+                            if len(rgb_match) >= 3:
+                                r, g, b = map(int, rgb_match[:3])
+                                value = f"#{r:02x}{g:02x}{b:02x}"
+                        except:
+                            pass
+                    
+                    # Simplify font families
+                    if key == 'font-family':
+                        value = value.split(',')[0].strip('"\'')
+                    
+                    cleaned[key] = value
+            
+            return cleaned
+        
+        # Clean all style objects
+        css_info['body_styles'] = clean_styles(css_info.get('body_styles'))
+        css_info['header_styles'] = clean_styles(css_info.get('header_styles'))
+        css_info['main_content_styles'] = clean_styles(css_info.get('main_content_styles'))
+        
+        # Clean common patterns
+        if css_info.get('common_patterns'):
+            cleaned_patterns = []
+            for pattern in css_info['common_patterns']:
+                cleaned_pattern = {
+                    'selector': pattern['selector'],
+                    'styles': clean_styles(pattern['styles']),
+                    'count': pattern.get('count', 1)
+                }
+                if cleaned_pattern['styles']:  # Only keep patterns with actual styles
+                    cleaned_patterns.append(cleaned_pattern)
+            css_info['common_patterns'] = cleaned_patterns[:15]  # Limit to 15 most important
+        
+        return css_info
+
+    # COLOR DATA FROM WEBSITE
     async def _extract_color_palette(self, page: Page) -> List[str]:
         try:
             colors = await page.evaluate("""
                 () => {
                     const colors = new Set();
-                    const elements = document.querySelectorAll('*');
                     
-                    // Limit to first 100 elements for performance
-                    const elementsArray = Array.from(elements).slice(0, 100);
-                    
-                    elementsArray.forEach(element => {
-                        const styles = window.getComputedStyle(element);
-                        const bgColor = styles.backgroundColor;
-                        const textColor = styles.color;
-                        const borderColor = styles.borderColor;
+                    // Helper to normalize colors to hex
+                    function normalizeColor(color) {
+                        if (!color || color === 'transparent' || color === 'none') return null;
                         
-                        [bgColor, textColor, borderColor].forEach(color => {
-                            if (color && 
-                                color !== 'rgba(0, 0, 0, 0)' && 
-                                color !== 'transparent' &&
-                                color !== 'rgba(0, 0, 0, 0)' &&
-                                !color.includes('rgba(0, 0, 0, 0)')) {
-                                colors.add(color);
+                        // Already hex?
+                        if (color.startsWith('#')) {
+                            return color.length === 4 ? 
+                                color.replace(/./g, (c, i) => i ? c + c : c) : color;
+                        }
+                        
+                        // Handle rgb/rgba
+                        const rgbMatch = color.match(/rgba?\\((\\d+),\\s*(\\d+),\\s*(\\d+)(?:,\\s*([\\d.]+))?\\)/);
+                        if (rgbMatch) {
+                            const [, r, g, b, a] = rgbMatch;
+                            
+                            // Skip very transparent colors
+                            if (a !== undefined && parseFloat(a) < 0.3) return null;
+                            
+                            const toHex = n => parseInt(n).toString(16).padStart(2, '0');
+                            return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+                        }
+                        
+                        // Handle named colors
+                        const namedColors = {
+                            'red': '#ff0000', 'blue': '#0000ff', 'green': '#008000',
+                            'yellow': '#ffff00', 'orange': '#ffa500', 'purple': '#800080',
+                            'pink': '#ffc0cb', 'brown': '#a52a2a', 'gray': '#808080',
+                            'grey': '#808080', 'cyan': '#00ffff', 'magenta': '#ff00ff'
+                        };
+                        
+                        return namedColors[color.toLowerCase()] || null;
+                    }
+                    
+                    // 1. Extract from all elements with explicit colors
+                    console.log('Scanning elements...');
+                    const allElements = document.querySelectorAll('*');
+                    
+                    Array.from(allElements).forEach((element, index) => {
+                        if (index > 500) return; // Limit for performance
+                        
+                        const styles = window.getComputedStyle(element);
+                        const rect = element.getBoundingClientRect();
+                        
+                        // Only check visible elements
+                        if (rect.width > 5 && rect.height > 5) {
+                            const colorProps = [
+                                styles.backgroundColor,
+                                styles.color,
+                                styles.borderTopColor,
+                                styles.borderRightColor,
+                                styles.borderBottomColor,
+                                styles.borderLeftColor,
+                                styles.outlineColor,
+                                styles.textDecorationColor,
+                                styles.caretColor,
+                                styles.columnRuleColor
+                            ];
+                            
+                            colorProps.forEach(color => {
+                                const normalized = normalizeColor(color);
+                                if (normalized && normalized !== '#000000' && normalized !== '#ffffff') {
+                                    colors.add(normalized);
+                                    console.log(`Found color: ${normalized} on element:`, element.tagName);
+                                }
+                            });
+                            
+                            // Check for background images with gradients!!
+                            const bgImage = styles.backgroundImage;
+                            if (bgImage && bgImage !== 'none') {
+                                // Extract colors from gradients
+                                const gradientColors = bgImage.match(/#[0-9a-fA-F]{3,6}|rgb\\([^)]+\\)|rgba\\([^)]+\\)/g);
+                                if (gradientColors) {
+                                    gradientColors.forEach(color => {
+                                        const normalized = normalizeColor(color);
+                                        if (normalized) {
+                                            colors.add(normalized);
+                                            console.log(`Found gradient color: ${normalized}`);
+                                        }
+                                    });
+                                }
                             }
-                        });
+                        }
                     });
                     
-                    return Array.from(colors).slice(0, 20);
+                    // 2. Extract from inline styles
+                    console.log('Scanning inline styles...');
+                    const elementsWithStyle = document.querySelectorAll('[style]');
+                    elementsWithStyle.forEach(element => {
+                        const style = element.getAttribute('style');
+                        const colorMatches = style.match(/#[0-9a-fA-F]{3,6}|rgb\\([^)]+\\)|rgba\\([^)]+\\)/g);
+                        if (colorMatches) {
+                            colorMatches.forEach(color => {
+                                const normalized = normalizeColor(color);
+                                if (normalized) {
+                                    colors.add(normalized);
+                                    console.log(`Found inline style color: ${normalized}`);
+                                }
+                            });
+                        }
+                    });
+                    
+                    // 3. Extract from CSS stylesheets
+                    console.log('Scanning stylesheets...');
+                    try {
+                        Array.from(document.styleSheets).forEach(sheet => {
+                            try {
+                                const rules = sheet.cssRules || sheet.rules || [];
+                                Array.from(rules).forEach(rule => {
+                                    if (rule.cssText) {
+                                        const colorMatches = rule.cssText.match(/#[0-9a-fA-F]{3,6}|rgb\\([^)]+\\)|rgba\\([^)]+\\)/g);
+                                        if (colorMatches) {
+                                            colorMatches.forEach(color => {
+                                                const normalized = normalizeColor(color);
+                                                if (normalized && normalized !== '#000000' && normalized !== '#ffffff') {
+                                                    colors.add(normalized);
+                                                    console.log(`Found CSS color: ${normalized}`);
+                                                }
+                                            });
+                                        }
+                                    }
+                                });
+                            } catch (e) {
+                                // Skip CORS-restricted stylesheets
+                            }
+                        });
+                    } catch (e) {
+                        console.log('Could not access stylesheets');
+                    }
+         
+                    const finalColors = Array.from(colors);
+                    console.log(`Total unique colors found: ${finalColors.length}`, finalColors);
+                    
+                    return finalColors.slice(0, 20);
                 }
             """)
             
-            return colors or []
+            print(f"Extracted {len(colors)} colors: {colors}")
+            
+            return list(set(colors))[:15] if colors else ['#4a90e2', '#f39c12', '#e74c3c']
             
         except Exception as e:
-            logger.error(f"Color extraction failed: {str(e)}")
-            return []
-        
-        
+            print(f"Error extracting colors: {e}")
+            return ['#4a90e2', '#f39c12', '#e74c3c']
+    
+    # TYPOGRAPHY FROM WEBSITE     
     async def _extract_typography(self, page: Page) -> Dict[str, any]:
         try:
             typography = await page.evaluate("""
@@ -394,6 +840,7 @@ class WebScrape:
             logger.error(f"Typography extraction failed: {str(e)}")
             return {"fonts": [], "headings": {}, "body_text": {}}
 
+    # LAYOUT FROM WEBSITE
     async def _extract_layout_info(self, page: Page) -> Dict[str, any]:
         try:
             layout = await page.evaluate("""
@@ -451,6 +898,7 @@ class WebScrape:
             return {"structure": [], "grid_info": {}}
 
     
+    # ASSETS FROM WEBSITE
     async def _extract_assets(self, page: Page, requests_log: List, base_url: str) -> Dict[str, List[str]]:
         assets = {
             "images": [],

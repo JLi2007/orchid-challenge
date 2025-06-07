@@ -5,152 +5,18 @@
 @custom-variant dark (&:is(.dark *));
 
 @theme {
-  --color-green1: #1ed760;
-  --color-green2: #95ffe1;
-  --color-green3: #0c9b7d;
-  --color-green3: #90ee90;
-  --color-turquoise1: #daf4f0;
-  --color-turquoise2: #70e2ff;
-  --color-turquoise3: #0e70ad;
-  --color-blue1: #add8e6;
-  --color-blue2: #1f87ff;
-  --color-blue3: #143bff;
-  --color-blue4: #030825;
   --font-railway: "Railway", sans-serif;
-
-  @keyframes pulse-and-scale {
-    0% {
-      transform: scale(0.2);
-      opacity: 0;
-    }
-    40% {
-      transform: scale(1.5);
-      opacity: 1;
-    }
-    60% {
-      transform: scale(1.5);
-      opacity: 1;
-    }
-    100% {
-      transform: scale(0.2);
-      opacity: 0;
-    }
+  --animate-gradient-x: gradient-x 4s ease infinite;
+}
+@keyframes gradient-x {
+  0%,
+  100% {
+    background-size: 200% 200%;
+    background-position: left center;
   }
-
-  /* aurora */
-  --blur: 1rem;
-  /* tailwind does not support clamp */
-  --fs: clamp(3rem, 8vw, 7rem);
-  --ls: clamp(-1.75px, -0.25vw, -3.5px);
-
-  @keyframes aurora-1 {
-    0% {
-      top: 0;
-      right: 0;
-    }
-
-    50% {
-      top: 100%;
-      right: 75%;
-    }
-
-    75% {
-      top: 100%;
-      right: 25%;
-    }
-
-    100% {
-      top: 0;
-      right: 0;
-    }
-  }
-
-  @keyframes aurora-2 {
-    0% {
-      top: -50%;
-      left: 0%;
-    }
-
-    60% {
-      top: 100%;
-      left: 75%;
-    }
-
-    85% {
-      top: 100%;
-      left: 25%;
-    }
-
-    100% {
-      top: -50%;
-      left: 0%;
-    }
-  }
-
-  @keyframes aurora-3 {
-    0% {
-      bottom: 0;
-      left: 0;
-    }
-
-    40% {
-      bottom: 100%;
-      left: 75%;
-    }
-
-    65% {
-      bottom: 40%;
-      left: 50%;
-    }
-
-    100% {
-      bottom: 0;
-      left: 0;
-    }
-  }
-
-  @keyframes aurora-4 {
-    0% {
-      bottom: -50%;
-      right: 0;
-    }
-
-    50% {
-      bottom: 0%;
-      right: 40%;
-    }
-
-    90% {
-      bottom: 50%;
-      right: 25%;
-    }
-
-    100% {
-      bottom: -50%;
-      right: 0;
-    }
-  }
-
-  @keyframes aurora-border {
-    0% {
-      border-radius: 37% 29% 27% 27% / 28% 25% 41% 37%;
-    }
-
-    25% {
-      border-radius: 47% 29% 39% 49% / 61% 19% 66% 26%;
-    }
-
-    50% {
-      border-radius: 57% 23% 47% 72% / 63% 17% 66% 33%;
-    }
-
-    75% {
-      border-radius: 28% 49% 29% 100% / 93% 20% 64% 25%;
-    }
-
-    100% {
-      border-radius: 37% 29% 27% 27% / 28% 25% 41% 37%;
-    }
+  50% {
+    background-size: 200% 200%;
+    background-position: right center;
   }
 }
 
@@ -178,53 +44,6 @@
 button,
 Button {
   cursor: pointer;
-}
-
-#title {
-  font-size: var(--fs);
-  font-weight: 500;
-  letter-spacing: var(--ls);
-}
-
-.aurora__item {
-  overflow: hidden;
-  position: absolute;
-  width: 60vw;
-  height: 60vw;
-  background-color: var(--color-green2);
-  border-radius: 37% 29% 27% 27% / 28% 25% 41% 37%;
-  filter: blur(var(--blur));
-  mix-blend-mode: overlay;
-}
-
-.aurora__item:nth-of-type(1) {
-  top: -50%;
-  animation: aurora-border 5s ease-in-out infinite,
-    aurora-1 10s ease-in-out infinite alternate;
-}
-
-.aurora__item:nth-of-type(2) {
-  background-color: var(--color-turquoise2);
-  right: 0;
-  top: 0;
-  animation: aurora-border 5s ease-in-out infinite,
-    aurora-2 10s ease-in-out infinite alternate;
-}
-
-.aurora__item:nth-of-type(3) {
-  background-color: var(--color-green4);
-  left: 0;
-  bottom: 0;
-  animation: aurora-border 5s ease-in-out infinite,
-    aurora-3 6s ease-in-out infinite alternate;
-}
-
-.aurora__item:nth-of-type(4) {
-  background-color: var(--color-turqouise1);
-  right: 0;
-  bottom: -50%;
-  animation: aurora-border 5s ease-in-out infinite,
-    aurora-4 20s ease-in-out infinite alternate;
 }
 
 @theme inline {
@@ -336,7 +155,7 @@ Button {
 
 @layer base {
   * {
-    @apply border-border outline-ring/50;
+    @apply border-border outline-ring/10;
   }
   body {
     @apply bg-background text-foreground;

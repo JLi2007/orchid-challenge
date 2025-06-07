@@ -7,7 +7,7 @@ import ProgressBar from "@/components/progress";
 export default function Home() {
   const ws = useRef<WebSocket | null>(null);
   const [userInput, setUserInput] = useState<string>(
-    "https://www.tripadvisor.ca/"
+    "https://tailwindcss.com"
   );
   const [status, setStatus] = useState<
     | ""
@@ -135,8 +135,8 @@ export default function Home() {
   return (
     <div className="w-screen h-screen min-h-screen relative bg-[url('/bg1.png')] bg-cover bg-center">
       <div className="flex w-full items-center justify-center">
-        <div className="p-5 flex items-center justify-center flex-col gap-3 w-[90%] bg-pink-200/50 rounded-b-xl">
-          <h1 className="text-black font-bold text-2xl">orchids-challenge</h1>
+        <div className="p-5 flex items-center justify-center flex-col gap-3 w-[90%] bg-pink-200/70 rounded-b-xl">
+          <h1 className="font-bold text-transparent text-2xl bg-clip-text bg-linear-to-r from-pink-400/80 via-pink-800/70 to-pink-600/70 animate-gradient-x">orchids-challenge</h1>
 
           <Input
             type="text"
@@ -148,11 +148,11 @@ export default function Home() {
             className="bg-pink-100 w-[50%]"
           />
           <Button
-            className="cursor-pointer bg-pink-200/80 hover:bg-pink-200/70"
+            className="cursor-pointer bg-pink-200/80 hover:bg-pink-200/70 font-semibold "
             variant={"secondary"}
             onClick={cloneWebsite}
           >
-            CLONE!
+            <h1 className="text-transparent bg-clip-text bg-linear-to-r from-pink-600/70 via-pink-800/70 to-pink-400/80 animate-gradient-x">CLONE!</h1>
           </Button>
 
           <ProgressBar status={status} progress={progress} />
@@ -160,7 +160,7 @@ export default function Home() {
       </div>
 
       {/* Iframe to display generated HTML */}
-      <div className="h-[70vh] w-full p-4">
+      <div className="h-[70vh] w-full p-4 overflow-auto">
         {iframeUrl ? (
           <iframe
             src={iframeUrl}
@@ -168,8 +168,8 @@ export default function Home() {
             title="Cloned Website"
           />
         ) : (
-          <div className="w-full h-full border border-gray-300 rounded-lg shadow-lg bg-gray-100 flex items-center justify-center">
-            <p className="text-gray-500">
+          <div className="w-full h-full border border-pink-300 rounded-lg shadow-lg bg-pink-200/80 flex items-center justify-center">
+            <p className="text-transparent bg-clip-text bg-linear-to-r from-pink-600/70 via-pink-800/70 to-pink-400/80 animate-gradient-x">
               {status === "COMPLETED" ? "Loading HTML..." : "Generated website will appear here"}
             </p>
           </div>

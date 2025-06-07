@@ -1,6 +1,6 @@
-# Orchids SWE Intern Challenge Template
+# Submission - James Siyuan Li
 
-This project consists of a backend built with FastAPI and a frontend built with Next.js and TypeScript.
+# No extra setup... browserbase and openai key included.
 
 ## Backend
 
