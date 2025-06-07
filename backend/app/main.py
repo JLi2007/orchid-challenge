@@ -233,7 +233,8 @@ async def process_scraping_data(scraping_result: ScrapingResult) -> Dict:
         "typography": scraping_result.typography,
         "layout_info": scraping_result.layout_info,
         "css_info": scraping_result.extracted_css,
-        "metadata": scraping_result.metadata
+        "metadata": scraping_result.metadata,
+        "raw_html": scraping_result.raw_html
     }
     
 async def generate_html_with_llm(processed_data: Dict) -> str:
@@ -267,19 +268,53 @@ async def generate_html_with_llm(processed_data: Dict) -> str:
     """
     
 
- # returns status of job_id
-@app.get("/api/clone/{job_id}/status", response_model=CloneJob)
-async def get_clone_status(job_id: str):
-    if job_id not in jobs_db:
-        raise HTTPException(status_code=404, detail="Job not found")
+#  # returns status of job_id
+# @app.get("/api/clone/{job_id}/status", response_model=CloneJob)
+# async def get_clone_status(job_id: str):
+#     if job_id not in jobs_db:
+#         raise HTTPException(status_code=404, detail="Job not found")
     
-    return jobs_db[job_id]
+#     return jobs_db[job_id]
 
 # result
 @app.get("api/clone/{job_id}/result")
+async def get_clone_result(job_id: str):
+    if job_id not in jobs_db:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    job = jobs_db[job_id]
+    
+    if job.status != CloneStatus.COMPLETED:
+        raise HTTPException(status_code=400, detail=f"Job not completed. Current status: {job.status}")
+    
+    if not job.result_data:
+        raise HTTPException(status_code=500, detail="No result data available")
+    
+    return{
+        "job_id": job_id,
+        "original_url": job.result_data["original_url"],
+        "generated_html": job.result_data["generated_html"],
+        "metadata": job.result_data["scraping_metadata"]
+    }
 
-# preview
-@app.get("api/clone/{job_id}/preview")
+# delete job
+@app.delete("/api/clone/{job_id}")
+async def delete_clone_job(job_id: str):
+    if job_id not in jobs_db:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    del jobs_db[job_id]
+    return {"message": f"Job {job_id} deleted successfully"}
+        
+
+# health check
+@app.get("/health")
+async def health_check():
+    return {
+        "status": "healthy", 
+        "service": "website-cloner-api",
+        "active_jobs": len([job for job in jobs_db.values() if job.status not in [CloneStatus.COMPLETED, CloneStatus.FAILED]])
+    }
 
 # websocket
 @app.websocket("/ws/clone/{job_id}")
@@ -297,6 +332,19 @@ async def websocket_endpoint(websocket: WebSocket, job_id: str):
         pass
     finally:
         manager.disconnect(job_id)
+       
+# root
+@app.get("/")
+async def root():
+    return {
+        "message": "Website Cloner API", 
+        "status": "running",
+        "endpoints": {
+            "start_clone": "POST /api/clone",
+            "check_status": "GET /api/clone/{job_id}/status", 
+            "get_result": "GET /api/clone/{job_id}/result"
+        }
+    }
 
 # RUN APPLICATION
 def main():

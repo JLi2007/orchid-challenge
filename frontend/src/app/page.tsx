@@ -31,7 +31,6 @@ export default function Home() {
     console.log(data);
     const jobId = data.job_id as string;
 
-    
     // ── 3. Open a single WebSocket for this job_id ──
     const backendHost = process.env.NEXT_PUBLIC_BACKEND!.replace(/^https?:\/\//, ""); 
     ws.current = new WebSocket(`ws://${backendHost}/ws/clone/${jobId}`);
@@ -49,7 +48,7 @@ export default function Home() {
 
     ws.current.onopen = () => {
       console.log("WebSocket opened for job:", jobId);
-      // Optionally send a “hello” or just stay idle; server doesn’t need client pings
+      ws.current!.send("test");
     };
     ws.current.onclose = () => {
       console.log("WebSocket closed");

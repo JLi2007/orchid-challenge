@@ -2,22 +2,18 @@ import os
 import requests
 import asyncio
 import random
+import base64
+import logging
 from browserbase import Browserbase
 from urllib.parse import urlparse
 from dotenv import load_dotenv
-
+from bs4 import BeautifulSoup
 # types
 from typing import List, Dict, Optional
 from dataclasses import dataclass
-
-# from urllib.parse import urljoin
-# from aiohttp import ClientSession
-# from fastapi import HTTPException
-# from fastapi import status as http_status
 from playwright.async_api import async_playwright, Page
 
 # CONFIGURE LOGGING
-import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -171,9 +167,9 @@ class WebScrape:
             assets = await self._extract_assets(page, requests_log, url)
             
             # Extract metadata
-            metadata = await self._extract_metadata(page)
+            metadata = await self._extract_metadata(page,requests_log, url)
             
-            # Extract metadata
+            # Extract html
             raw_html = await self._extract_raw_html(page)
             
             await page.close()
@@ -195,54 +191,437 @@ class WebScrape:
         except Exception as e:
             logger.error(f"Scraping execution failed: {str(e)}")
             return self._create_error_result(url, str(e))
-        
+    
+    # SCREENSHOT DATA FROM WEBSITE  
     async def _capture_screenshots(self, page: Page) -> Dict[str, str]:
-        logger.info("capturing screenshot")
-        return {
-            "full_page": "screenshot_full_page.png",     
-            "viewport": "screenshot_viewport.png"       
+        screenshots = {}
+        
+        viewports = {
+            "desktop": {"width": 1920, "height": 1080},
+            "tablet": {"width": 768, "height": 1024},
+            "mobile": {"width": 375, "height": 667}
         }
+        
+        try:
+            for viewport_name, viewport_size in viewports.items():
+                # Set viewport
+                await page.set_viewport_size(viewport_size)
+                await page.wait_for_timeout(1000)
+                
+                # Take full page screenshot
+                screenshot_bytes = await page.screenshot(
+                    full_page=True,
+                    type='png'
+                )
+                
+                # Convert to base64
+                screenshots[viewport_name] = base64.b64encode(screenshot_bytes).decode('utf-8')
+                
+        except Exception as e:
+            logger.error(f"Screenshot capture failed: {str(e)}")
+        
+        return screenshots
 
+    # CSS DATA FROM WEBSITE
     async def _extract_css_info(self, page: Page) -> Dict[str, any]:
-        logger.info("extracting css")
-        return {
-            "body": {"margin": "0", "padding": "0", "font-family": "Arial"},
-            ".header": {"background-color": "#ffffff", "height": "60px"},
-            ".btn": {"background-color": "#e91e63", "color": "#ffffff", "padding": "10px 20px"}
+        css_info = {
+            "body_styles": {},
+            "header_styles": {},
+            "main_content_styles": {},
+            "common_patterns": []
         }
+        
+        try:
+            # Extract body styles
+            body_styles = await page.evaluate("""
+                () => {
+                    const body = document.body;
+                    const styles = window.getComputedStyle(body);
+                    return {
+                        'background-color': styles.backgroundColor,
+                        'font-family': styles.fontFamily,
+                        'font-size': styles.fontSize,
+                        'line-height': styles.lineHeight,
+                        'color': styles.color,
+                        'margin': styles.margin,
+                        'padding': styles.padding
+                    };
+                }
+            """)
+            css_info["body_styles"] = body_styles
+            
+            # Extract header styles if exists
+            header_styles = await page.evaluate("""
+                () => {
+                    const header = document.querySelector('header');
+                    if (!header) return null;
+                    const styles = window.getComputedStyle(header);
+                    return {
+                        'background-color': styles.backgroundColor,
+                        'height': styles.height,
+                        'padding': styles.padding,
+                        'position': styles.position,
+                        'display': styles.display
+                    };
+                }
+            """)
+            if header_styles:
+                css_info["header_styles"] = header_styles
+            
+            common_selectors = ["h1", "h2", "h3", "p", "a", "button", ".container", ".wrapper", "nav"]
+            
+            for selector in common_selectors:
+                try:
+                    element_styles = await page.evaluate(f"""
+                        () => {{
+                            const element = document.querySelector('{selector}');
+                            if (!element) return null;
+                            const styles = window.getComputedStyle(element);
+                            return {{
+                                'font-size': styles.fontSize,
+                                'font-weight': styles.fontWeight,
+                                'color': styles.color,
+                                'margin': styles.margin,
+                                'padding': styles.padding,
+                                'display': styles.display,
+                                'background-color': styles.backgroundColor
+                            }};
+                        }}
+                    """)
+                    
+                    if element_styles:
+                        css_info["common_patterns"].append({
+                            "selector": selector,
+                            "styles": element_styles
+                        })
+                        
+                except Exception as e:
+                    logger.debug(f"Failed to extract styles for {selector}: {str(e)}")
+                    continue
+                    
+        except Exception as e:
+            logger.error(f"CSS extraction failed: {str(e)}")
+        
+        return css_info
 
     async def _extract_color_palette(self, page: Page) -> List[str]:
-        logger.info("extracting color")
-        return ["#ffffff", "#000000", "#e91e63", "#03a9f4"]
-
+        try:
+            colors = await page.evaluate("""
+                () => {
+                    const colors = new Set();
+                    const elements = document.querySelectorAll('*');
+                    
+                    // Limit to first 100 elements for performance
+                    const elementsArray = Array.from(elements).slice(0, 100);
+                    
+                    elementsArray.forEach(element => {
+                        const styles = window.getComputedStyle(element);
+                        const bgColor = styles.backgroundColor;
+                        const textColor = styles.color;
+                        const borderColor = styles.borderColor;
+                        
+                        [bgColor, textColor, borderColor].forEach(color => {
+                            if (color && 
+                                color !== 'rgba(0, 0, 0, 0)' && 
+                                color !== 'transparent' &&
+                                color !== 'rgba(0, 0, 0, 0)' &&
+                                !color.includes('rgba(0, 0, 0, 0)')) {
+                                colors.add(color);
+                            }
+                        });
+                    });
+                    
+                    return Array.from(colors).slice(0, 20);
+                }
+            """)
+            
+            return colors or []
+            
+        except Exception as e:
+            logger.error(f"Color extraction failed: {str(e)}")
+            return []
+        
+        
     async def _extract_typography(self, page: Page) -> Dict[str, any]:
-        logger.info("extracting typography")
-        return {
-            "title": "dummy title",
-            "description": "dummy description",
-            "url": "https://example.com"
-        }
+        try:
+            typography = await page.evaluate("""
+                () => {
+                    const fonts = new Set();
+                    const headings = {};
+                    const bodyText = {};
+                    
+                    // Extract font families
+                    const elements = Array.from(document.querySelectorAll('*')).slice(0, 50);
+                    elements.forEach(element => {
+                        const fontFamily = window.getComputedStyle(element).fontFamily;
+                        if (fontFamily) fonts.add(fontFamily);
+                    });
+                    
+                    // Extract heading styles
+                    for (let i = 1; i <= 6; i++) {
+                        const heading = document.querySelector(`h${i}`);
+                        if (heading) {
+                            const styles = window.getComputedStyle(heading);
+                            headings[`h${i}`] = {
+                                'font-size': styles.fontSize,
+                                'font-weight': styles.fontWeight,
+                                'line-height': styles.lineHeight,
+                                'margin': styles.margin,
+                                'font-family': styles.fontFamily
+                            };
+                        }
+                    }
+                    
+                    // Extract body text styles
+                    const paragraph = document.querySelector('p');
+                    if (paragraph) {
+                        const styles = window.getComputedStyle(paragraph);
+                        bodyText = {
+                            'font-size': styles.fontSize,
+                            'line-height': styles.lineHeight,
+                            'font-weight': styles.fontWeight,
+                            'font-family': styles.fontFamily
+                        };
+                    }
+                    
+                    return {
+                        fonts: Array.from(fonts),
+                        headings: headings,
+                        body_text: bodyText
+                    };
+                }
+            """)
+            
+            return typography
+            
+        except Exception as e:
+            logger.error(f"Typography extraction failed: {str(e)}")
+            return {"fonts": [], "headings": {}, "body_text": {}}
 
     async def _extract_layout_info(self, page: Page) -> Dict[str, any]:
-        logger.info("extracting layout info")
-        return {
-            "header": {"x": 0, "y": 0, "width": 800, "height": 60},
-            "main": {"x": 0, "y": 60, "width": 800, "height": 600},
-            "footer": {"x": 0, "y": 660, "width": 800, "height": 100}
-        }
+        try:
+            layout = await page.evaluate("""
+                () => {
+                    const structure = [];
+                    const gridInfo = {};
+                    
+                    // Identify main structural elements
+                    const structuralTags = ['header', 'nav', 'main', 'section', 'aside', 'footer', 'article'];
+                    
+                    structuralTags.forEach(tag => {
+                        const elements = document.querySelectorAll(tag);
+                        if (elements.length > 0) {
+                            structure.push({
+                                tag: tag,
+                                count: elements.length,
+                                classes: Array.from(elements).slice(0, 3).map(el => 
+                                    el.className ? el.className.split(' ') : []
+                                )
+                            });
+                        }
+                    });
+                    
+                    // Check for grid/flexbox layouts
+                    const allElements = Array.from(document.querySelectorAll('*')).slice(0, 30);
+                    allElements.forEach(element => {
+                        const styles = window.getComputedStyle(element);
+                        const display = styles.display;
+                        
+                        if (display === 'grid' || display === 'flex') {
+                            const tagName = element.tagName.toLowerCase();
+                            const className = element.className || 'no-class';
+                            
+                            gridInfo[`${tagName}.${className}`] = {
+                                display: display,
+                                'justify-content': styles.justifyContent,
+                                'align-items': styles.alignItems,
+                                'grid-template-columns': styles.gridTemplateColumns,
+                                'flex-direction': styles.flexDirection
+                            };
+                        }
+                    });
+                    
+                    return {
+                        structure: structure,
+                        grid_info: gridInfo
+                    };
+                }
+            """)
+            
+            return layout
+            
+        except Exception as e:
+            logger.error(f"Layout extraction failed: {str(e)}")
+            return {"structure": [], "grid_info": {}}
 
+    
     async def _extract_assets(self, page: Page, requests_log: List, base_url: str) -> Dict[str, List[str]]:
-        logger.info("extracting assets")
-        return {
-            "images": [f"{base_url}/images/logo.png", f"{base_url}/images/banner.jpg"],  # dummy URLs
-            "scripts": [f"{base_url}/js/app.js", f"{base_url}/js/vendor.js"],
-            "stylesheets": [f"{base_url}/css/main.css", f"{base_url}/css/theme.css"]
+        assets = {
+            "images": [],
+            "stylesheets": [],
+            "fonts": [],
+            "icons": [],
+            "scripts": []
         }
+        
+        try:
+            # Extract from DOM
+            dom_assets = await page.evaluate("""
+                () => {
+                    const assets = {
+                        images: [],
+                        stylesheets: [],
+                        fonts: [],
+                        icons: [],
+                        scripts: []
+                    };
+                    
+                    // Images
+                    document.querySelectorAll('img').forEach(img => {
+                        if (img.src) assets.images.push(img.src);
+                    });
+                    
+                    // Stylesheets
+                    document.querySelectorAll('link[rel="stylesheet"]').forEach(link => {
+                        if (link.href) assets.stylesheets.push(link.href);
+                    });
+                    
+                    // Fonts
+                    document.querySelectorAll('link').forEach(link => {
+                        const href = link.href || '';
+                        if (href.includes('fonts') || href.includes('font')) {
+                            assets.fonts.push(href);
+                        }
+                    });
+                    
+                    // Icons
+                    document.querySelectorAll('link[rel*="icon"]').forEach(link => {
+                        if (link.href) assets.icons.push(link.href);
+                    });
+                    
+                    // Scripts
+                    document.querySelectorAll('script[src]').forEach(script => {
+                        if (script.src) assets.scripts.push(script.src);
+                    });
+                    
+                    return assets;
+                }
+            """)
+            
+            # Merge DOM assets
+            for asset_type, urls in dom_assets.items():
+                assets[asset_type].extend(urls)
+            
+            # Extract from network requests
+            for request in requests_log:
+                url = request['url']
+                resource_type = request['resource_type']
+                
+                if resource_type == 'image':
+                    assets['images'].append(url)
+                elif resource_type == 'stylesheet':
+                    assets['stylesheets'].append(url)
+                elif resource_type == 'font':
+                    assets['fonts'].append(url)
+                elif resource_type == 'script':
+                    assets['scripts'].append(url)
+            
+            # Remove duplicates and limit count
+            for asset_type in assets:
+                assets[asset_type] = list(set(assets[asset_type]))[:20]
+                
+        except Exception as e:
+            logger.error(f"Asset extraction failed: {str(e)}")
+        
+        return assets
+    
+    async def _extract_metadata(self, page: Page) -> Dict[str, any]:
+        try:
+            metadata = await page.evaluate("""
+                () => {
+                    const meta = {
+                        title: '',
+                        description: '',
+                        keywords: '',
+                        viewport: '',
+                        charset: '',
+                        og_data: {}
+                    };
+                    
+                    // Title
+                    const title = document.querySelector('title');
+                    if (title) meta.title = title.textContent.trim();
+                    
+                    // Meta tags
+                    document.querySelectorAll('meta').forEach(metaTag => {
+                        const name = metaTag.getAttribute('name') || '';
+                        const property = metaTag.getAttribute('property') || '';
+                        const content = metaTag.getAttribute('content') || '';
+                        
+                        if (name.toLowerCase() === 'description') {
+                            meta.description = content;
+                        } else if (name.toLowerCase() === 'keywords') {
+                            meta.keywords = content;
+                        } else if (name.toLowerCase() === 'viewport') {
+                            meta.viewport = content;
+                        } else if (metaTag.hasAttribute('charset')) {
+                            meta.charset = metaTag.getAttribute('charset');
+                        } else if (property.startsWith('og:')) {
+                            meta.og_data[property] = content;
+                        }
+                    });
+                    
+                    return meta;
+                }
+            """)
+            
+            return metadata
+            
+        except Exception as e:
+            logger.error(f"Metadata extraction failed: {str(e)}")
+            return {}
 
     async def _extract_raw_html(self, page: Page) -> str:  
-        logger.info("extracting raw_html")
-        return "<!DOCTYPE html><html><head><title>Dummy</title></head><body><p>Dummy HTML content</p></body></html>"
+        try:
+            return page.content()
+        
+        except Exception as e:
+            logger.error(f"Metadata extraction failed: {str(e)}")
+            return {}
 
+    def _clean_dom(self, html: str) -> str:
+        try:
+            soup = BeautifulSoup(html, 'html.parser')
+            
+            # Remove scripts
+            for script in soup.find_all("script"):
+                script.decompose()
+            
+            # Remove style tags (we extract CSS separately)
+            for style in soup.find_all("style"):
+                style.decompose()
+            
+            # Remove comments
+            for comment in soup.find_all(string=lambda text: isinstance(text, str) and text.strip().startswith('<!--')):
+                comment.extract()
+            
+            # Remove tracking elements
+            tracking_selectors = [
+                '[id*="analytics"]', '[class*="analytics"]',
+                '[id*="tracking"]', '[class*="tracking"]',
+                '[id*="gtm"]', '[class*="gtm"]',
+                '[id*="facebook"]', '[class*="facebook"]'
+            ]
+            
+            for selector in tracking_selectors:
+                for element in soup.select(selector):
+                    element.decompose()
+            
+            return str(soup)
+            
+        except Exception as e:
+            logger.error(f"DOM cleaning failed: {str(e)}")
+            return html
             
     # CHECK URL VALIDITY
     def _is_valid_url(self, url: str) -> bool:
@@ -257,14 +636,13 @@ class WebScrape:
         return ScrapingResult(
             url=url, screenshots={}, dom_structure="", 
             extracted_css={}, color_palette=[], typography={}, 
-            layout_info={}, assets={}, metadata={}, 
+            layout_info={}, assets={}, metadata={}, raw_html={},
             success=False, error_message=error_message
         )
                  
     
     # BROWSER CLEANUP
     async def _cleanup_browser(self):
-        """Clean up browser resources"""
         try:
             if self.context:
                 await self.context.close()
@@ -275,26 +653,3 @@ class WebScrape:
         except Exception as e:
             logger.error(f"Browser cleanup failed: {str(e)}")
         
-        
-        
-    
-    
-
-# async def get_html(url: str) -> b4.BeautifulSoup:
-#     async with ClientSession() as session:
-#         async with session.get(url) as response:
-#             text = await response.text()
-
-#             if response.status == 200:
-#                 html = b4.BeautifulSoup(markup=text, features="lxml")
-
-#                 return html
-
-#     raise HTTPException(status_code=http_status.HTTP_501_NOT_IMPLEMENTED,
-#                         detail=f"Scraper didn't succeed in getting data:\n"
-#                                f"\turl: {url}\n"
-#                                f"\tstatus code: {response.status}\n"
-#                                f"\tresponse text: {text}")
-    
-    
-    

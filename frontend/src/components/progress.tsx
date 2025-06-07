@@ -23,7 +23,7 @@ export default function ProgressBar({ status }: StatusType) {
       <div className="w-full bg-gray-200 rounded-full h-4">
         <div
           className={`h-4 rounded-full ${
-            status === "FAILED" ? "bg-red-500" : "bg-blue-600"
+            status === "FAILED" ? "bg-red-500" : status === "COMPLETED" ? "bg-pink-500" : "bg-blue-600"
           }`}
           style={{ width: `${progress}%` }}
         ></div>
