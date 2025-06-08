@@ -1,7 +1,7 @@
 # Submission - James Siyuan Li
 ### [DEMO!](https://drive.google.com/file/d/1ILo2MjBigSefwg7FyrYUoLkoeHWB6w6s/view?usp=sharing)
 
-# No extra setup... browserbase and openai key included.
+# commented env vars in main.py (idrc+this was originally supposed to be a zip file but i submitted github as it was too large)
 
 ## Backend
 

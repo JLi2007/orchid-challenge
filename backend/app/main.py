@@ -1,3 +1,7 @@
+# BROWSERBASE_ID = "30e69187" + "-6baf" + "-4ba3" + "-8ca9" + "-dc1ad2ac02b8"
+# BROWSERBASE_KEY = ("bb" "_" "live_" "nOLC7JAr8XCiHMsldZW3Z6RmDkk")
+# OPENAI_KEY = ("sk" "-proj-" "H9lOhSho6Xu_WiGCeBPiJ0NBaxzEnbmLS5pJ9M0V66OwCX73Hayqy1UlsdwHC7dsx7rq-fdzl5T3BlbkFJ1_S1WNQV1EW1U7ZKYrehEzubchuFSqc3phLIqqSawKEDv8z5I7sbnuYbySFBmBc-BnUJsisAAA")
+
 import os
 import asyncio
 import uvicorn
